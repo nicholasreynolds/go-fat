@@ -88,7 +88,7 @@ func (d Disk) initFS() error {
 	return nil
 }
 
-// Initializes the superblock
+// Initializes the superblock, called by initFS()
 func (d Disk) initSuperblock() error {
 	// (2 bytes per FAT Entry) * (Num FAT Entries) / (Num bytes per block)
 	numFatBlks := (2 * d.dataBlks) / BlockSize
