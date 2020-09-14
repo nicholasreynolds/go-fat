@@ -3,6 +3,7 @@ package disk
 import (
 	"encoding/binary"
 	"fmt"
+	"math"
 	"os"
 )
 
@@ -66,6 +67,7 @@ func newDisk(filename string, dataBlocks int) (Disk, error) {
 
 	file, err := os.Create(filename)
 	if err != nil {
+		os.Remove(filename)
 		return Disk{}, err
 	}
 
@@ -74,10 +76,10 @@ func newDisk(filename string, dataBlocks int) (Disk, error) {
 
 // Initializes the filesystem
 func (d Disk) initFS() error {
-	numFATBlks := (2 * d.dataBlks) / BlockSize
+	numFATBlks := int(math.Ceil( (2 * float64(d.dataBlks))/BlockSize ))
 	numTotalBlks := 2 + numFATBlks + d.dataBlks
 	// initalize full disk
-	_, err := d.fd.Write(make([]byte, numTotalBlks))
+	_, err := d.fd.Write(make([]byte, numTotalBlks * BlockSize))
 	if err != nil {
 		return err
 	}
@@ -91,7 +93,7 @@ func (d Disk) initFS() error {
 // Initializes the superblock, called by initFS()
 func (d Disk) initSuperblock() error {
 	// (2 bytes per FAT Entry) * (Num FAT Entries) / (Num bytes per block)
-	numFatBlks := (2 * d.dataBlks) / BlockSize
+	numFatBlks := int(math.Ceil( (2 * float64(d.dataBlks))/BlockSize ))
 	// 1 block for superblock + 1 block for root directory + FAT + data
 	numBlks := 2 + numFatBlks + d.dataBlks
 	// initialize superblock byte slice and extract subslices for each section
@@ -109,8 +111,9 @@ func (d Disk) initSuperblock() error {
 	binary.LittleEndian.PutUint16(dataStartInd, uint16(2 + numFatBlks))
 	binary.LittleEndian.PutUint16(dataBlockCt, uint16(d.dataBlks))
 	fatBlockCt[0] = byte(numFatBlks)
-	// write byte slice to disk file
-	_, err := d.fd.Write(superblock)
+	// write byte slice to beginning of disk file
+	var offset int64 = 0
+	_, err := d.fd.WriteAt(superblock, offset)
 	if err != nil {
 		return err
 	}

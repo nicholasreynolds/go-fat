@@ -2,6 +2,7 @@ package disk
 
 import (
 	"encoding/binary"
+	"math"
 	"os"
 	"strings"
 	"testing"
@@ -29,18 +30,21 @@ func TestCreate(t *testing.T) {
 	t.Run("initSuperblock", func(t *testing.T) {
 		// Setup
 		d, _ := newDisk(filename, blockCt)
-		block := make([]byte, BlockSize)
-		d.fd.Write(block)
 		// Test
 		if err := d.initSuperblock(); err != nil {
 			t.Error(err)
 		}
-		d.fd.Read(block)
-		// Extract values, only tested subset that insert values differently
+		block := make([]byte, BlockSize)
+		var offset int64 = 0
+		n, err := d.fd.ReadAt(block, offset)
+		if err != nil || n == 0 {
+			t.Errorf("Error while reading superblock: %v bytes read, %s", n, err)
+		}
+		// Extract values, only test subset that were inserted differently
 		sig := block[:SbSigSize]
 		dataBlockCtBytes := block[SbDataBlockCtOffset:(SbDataBlockCtOffset + SbDataBlockCtSize)]
-		dataBlockCt := int(binary.LittleEndian.Uint16(dataBlockCtBytes))
 		fatBlockCtBytes := block[SbFatBlockCtOffset:(SbFatBlockCtOffset + SbFatBlockCtSize)]
+		dataBlockCt := int(binary.LittleEndian.Uint16(dataBlockCtBytes))
 		fatBlockCt := int(fatBlockCtBytes[0])
 		// Compare to expected
 		builder := strings.Builder{}
@@ -52,7 +56,7 @@ func TestCreate(t *testing.T) {
 		if dataBlockCt != d.dataBlks {
 			t.Errorf("Expected data block count %v, Got %v", d.dataBlks, dataBlockCt)
 		}
-		fatBlockCtExp := (2 * d.dataBlks) / BlockSize
+		fatBlockCtExp := int(math.Ceil( (2 * float64(d.dataBlks)) / BlockSize ))
 		if fatBlockCt != fatBlockCtExp {
 			t.Errorf("Expected fat block count %v, Got %v", fatBlockCtExp, fatBlockCt)
 		}
@@ -66,6 +70,9 @@ func TestCreate(t *testing.T) {
 		if err := d.initFS(); err != nil {
 			t.Error(err)
 		}
+		// (2 blocks for sb and rootdir) * (number of bytes per block) +
+		// (2 bytes for each fat entry) * (num fat entries i.e. data block count) +
+		// (number of data blocks) * (number of bytes per block
 		fLenExp := int64(2*BlockSize + 2*blockCt + blockCt*BlockSize)
 		fStat, _ := d.fd.Stat()
 		fLenGot := fStat.Size()
