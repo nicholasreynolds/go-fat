@@ -70,10 +70,9 @@ func TestCreate(t *testing.T) {
 		if err := d.initFS(); err != nil {
 			t.Error(err)
 		}
-		// (2 blocks for sb and rootdir) * (number of bytes per block) +
-		// (2 bytes for each fat entry) * (num fat entries i.e. data block count) +
-		// (number of data blocks) * (number of bytes per block
-		fLenExp := int64(2*BlockSize + 2*blockCt + blockCt*BlockSize)
+		fatBlks := int(math.Ceil( (2 * float64(d.dataBlks))/BlockSize ))
+		totBlks := 2 + fatBlks + blockCt
+		fLenExp := int64(totBlks * BlockSize)
 		fStat, _ := d.fd.Stat()
 		fLenGot := fStat.Size()
 		if fLenGot != fLenExp {
