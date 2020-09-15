@@ -8,12 +8,12 @@ import (
 	"testing"
 )
 
-func TestCreate(t *testing.T) {
+func TestNew(t *testing.T) {
 	// Setup
 	filename, blockCt := "test.disk", 64
 	// Internal tests
-	t.Run("newDisk", func(t *testing.T) {
-		d, err := newDisk(filename, blockCt)
+	t.Run("createDisk", func(t *testing.T) {
+		d, err := createDisk(filename, blockCt)
 		if err != nil {
 			// Covers any file-related kernel and i/o errors
 			t.Error(err)
@@ -29,7 +29,7 @@ func TestCreate(t *testing.T) {
 	})
 	t.Run("initSuperblock", func(t *testing.T) {
 		// Setup
-		d, _ := newDisk(filename, blockCt)
+		d, _ := createDisk(filename, blockCt)
 		// Test
 		if err := d.initSuperblock(); err != nil {
 			t.Error(err)
@@ -65,7 +65,7 @@ func TestCreate(t *testing.T) {
 	})
 	t.Run("initFS", func(t *testing.T) {
 		// Setup
-		d, _ := newDisk(filename, blockCt)
+		d, _ := createDisk(filename, blockCt)
 		// Test
 		if err := d.initFS(); err != nil {
 			t.Error(err)
@@ -82,7 +82,7 @@ func TestCreate(t *testing.T) {
 		os.Remove(filename)
 	})
 	// Test
-	_, err := Create(filename, blockCt)
+	_, err := New(filename, blockCt)
 	if err != nil {
 		t.Error(err)
 	}

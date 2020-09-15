@@ -45,9 +45,10 @@ type Disk struct {
 	dataBlks int
 }
 
-// Creates the disk file and initializes its filesystem
-func Create(filename string, dataBlocks int) (Disk, error) {
-	d, err := newDisk(filename, dataBlocks)
+// Makes a new disk and initializes its filesystem
+// Scope: exported
+func New(filename string, dataBlocks int) (Disk, error) {
+	d, err := createDisk(filename, dataBlocks)
 	if err != nil {
 		return d, err
 	}
@@ -60,7 +61,8 @@ func Create(filename string, dataBlocks int) (Disk, error) {
 }
 
 // Instantiates a new disk and creates the associated file
-func newDisk(filename string, dataBlocks int) (Disk, error) {
+// Scope: internal
+func createDisk(filename string, dataBlocks int) (Disk, error) {
 	if len(filename) == 0 {
 		return Disk{}, InvalidFilenameError{filename}
 	}
@@ -75,6 +77,7 @@ func newDisk(filename string, dataBlocks int) (Disk, error) {
 }
 
 // Initializes the filesystem
+// Scope: internal
 func (d Disk) initFS() error {
 	numFATBlks := int(math.Ceil( (2 * float64(d.dataBlks))/BlockSize ))
 	numTotalBlks := 2 + numFATBlks + d.dataBlks
@@ -91,6 +94,7 @@ func (d Disk) initFS() error {
 }
 
 // Initializes the superblock, called by initFS()
+// Scope: internal
 func (d Disk) initSuperblock() error {
 	// (2 bytes per FAT Entry) * (Num FAT Entries) / (Num bytes per block)
 	numFatBlks := int(math.Ceil( (2 * float64(d.dataBlks))/BlockSize ))
