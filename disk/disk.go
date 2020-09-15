@@ -8,6 +8,7 @@ import (
 )
 
 const (
+	SbSig                = "NEWFATFS"
 	BlockSize            = 4096
 	SbSigSize            = 8
 	SbBlockCtOffset      = 0x08
@@ -25,7 +26,7 @@ const (
 )
 
 type CustomError struct {
-	message 	string
+	message string
 }
 
 func (e CustomError) Error() string {
@@ -33,7 +34,7 @@ func (e CustomError) Error() string {
 }
 
 type InvalidFilenameError struct {
-	filename	string
+	filename string
 }
 
 func (e InvalidFilenameError) Error() string {
@@ -41,8 +42,13 @@ func (e InvalidFilenameError) Error() string {
 }
 
 type Disk struct {
-	fd       *os.File
-	dataBlks int
+	fd           *os.File // file descriptor for disk file
+	sig          string   // filesystem signature
+	blockCt      int      // total disk blocks
+	rootDirInd   int      // block index of the root directory
+	dataStartInd int      // disk block index of first data block
+	dataBlockCt  int      // number of data blocks on disk
+	fatBlockCt   int      // number of blocks used to store FAT
 }
 
 // Makes a new disk and initializes its filesystem
@@ -60,6 +66,12 @@ func New(filename string, dataBlocks int) (Disk, error) {
 	return d, nil
 }
 
+// Loads a disk file and returns the associated structure
+// Scope: exported
+func Mount(filename string) (Disk, error) {
+	return Disk{}, nil
+}
+
 // Instantiates a new disk and creates the associated file
 // Scope: internal
 func createDisk(filename string, dataBlocks int) (Disk, error) {
@@ -73,16 +85,16 @@ func createDisk(filename string, dataBlocks int) (Disk, error) {
 		return Disk{}, err
 	}
 
-	return Disk{file, dataBlocks}, nil
+	return Disk{fd: file, dataBlockCt: dataBlocks}, nil
 }
 
 // Initializes the filesystem
 // Scope: internal
 func (d Disk) initFS() error {
-	numFATBlks := int(math.Ceil( (2 * float64(d.dataBlks))/BlockSize ))
-	numTotalBlks := 2 + numFATBlks + d.dataBlks
+	numFATBlks := int(math.Ceil((2 * float64(d.dataBlockCt)) / BlockSize))
+	numTotalBlks := 2 + numFATBlks + d.dataBlockCt
 	// initalize full disk
-	_, err := d.fd.Write(make([]byte, numTotalBlks * BlockSize))
+	_, err := d.fd.Write(make([]byte, numTotalBlks*BlockSize))
 	if err != nil {
 		return err
 	}
@@ -97,9 +109,9 @@ func (d Disk) initFS() error {
 // Scope: internal
 func (d Disk) initSuperblock() error {
 	// (2 bytes per FAT Entry) * (Num FAT Entries) / (Num bytes per block)
-	numFatBlks := int(math.Ceil( (2 * float64(d.dataBlks))/BlockSize ))
+	numFatBlks := int(math.Ceil((2 * float64(d.dataBlockCt)) / BlockSize))
 	// 1 block for superblock + 1 block for root directory + FAT + data
-	numBlks := 2 + numFatBlks + d.dataBlks
+	numBlks := 2 + numFatBlks + d.dataBlockCt
 	// initialize superblock byte slice and extract subslices for each section
 	superblock := make([]byte, BlockSize)
 	sig := superblock[:SbSigSize]
@@ -108,13 +120,19 @@ func (d Disk) initSuperblock() error {
 	dataStartInd := superblock[SbDataStartIndOffset:(SbDataStartIndOffset + SbDataStartIndSize)]
 	dataBlockCt := superblock[SbDataBlockCtOffset:(SbDataBlockCtOffset + SbDataBlockCtSize)]
 	fatBlockCt := superblock[SbFatBlockCtOffset:(SbFatBlockCtOffset + SbFatBlockCtSize)]
+	// calculate values and store in disk structure
+	d.sig = SbSig
+	d.blockCt = numBlks
+	d.rootDirInd = 1 + numFatBlks
+	d.dataStartInd = 2 + numFatBlks
+	d.fatBlockCt = numFatBlks
 	// write data to each subslice
-	copy(sig, "NEWFATFS")
-	binary.LittleEndian.PutUint16(blockCt, uint16(numBlks))
-	binary.LittleEndian.PutUint16(rootDirInd, uint16(1 + numFatBlks))
-	binary.LittleEndian.PutUint16(dataStartInd, uint16(2 + numFatBlks))
-	binary.LittleEndian.PutUint16(dataBlockCt, uint16(d.dataBlks))
-	fatBlockCt[0] = byte(numFatBlks)
+	copy(sig, d.sig)
+	binary.LittleEndian.PutUint16(blockCt, uint16(d.blockCt))
+	binary.LittleEndian.PutUint16(rootDirInd, uint16(d.rootDirInd))
+	binary.LittleEndian.PutUint16(dataStartInd, uint16(d.dataStartInd))
+	binary.LittleEndian.PutUint16(dataBlockCt, uint16(d.dataBlockCt))
+	fatBlockCt[0] = byte(d.fatBlockCt)
 	// write byte slice to beginning of disk file
 	var offset int64 = 0
 	_, err := d.fd.WriteAt(superblock, offset)
