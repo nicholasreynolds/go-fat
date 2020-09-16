@@ -62,7 +62,7 @@ func TestNew(t *testing.T) {
 			t.Errorf("Expected fat block count %v, Got %v", fatBlockCtExp, fatBlockCt)
 		}
 		// Same method of assignment for all variables, so only test a couple
-		if sigGot != d.sig {
+		if 0 != strings.Compare(sigGot, d.sig) {
 			t.Errorf("Read signature doesn't match structure value: %s, %s", sigGot, d.sig)
 		}
 		if dataBlockCt != d.dataBlockCt {
@@ -110,7 +110,8 @@ func TestMount(t *testing.T) {
 	t.Run("readSuperblock", func(t *testing.T) {
 		// Setup
 		fd, _ := os.Open(tFilename)
-		d := Disk{fd: fd}
+		d := Disk{fd: fd, dataBlockCt: tBlockCt}
+		d.initFS()
 		// Test
 		d.readSuperblock()
 		sigExp := SbSig
@@ -119,7 +120,7 @@ func TestMount(t *testing.T) {
 		rootDirIndExp := 1 + fatBlockCtExp
 		dataStartIndExp := 1 + rootDirIndExp
 		dataBlockCtExp := tBlockCt
-		if d.sig != sigExp {
+		if 0 != strings.Compare(d.sig, sigExp) {
 			t.Errorf("Expected sig %s, Got %s", sigExp, d.sig)
 		}
 		if d.fatBlockCt != fatBlockCtExp {

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"strings"
 )
 
 const (
@@ -69,7 +70,23 @@ func New(filename string, dataBlocks int) (Disk, error) {
 // Loads a disk file and returns the associated structure
 // Scope: exported
 func Mount(filename string) (Disk, error) {
-	return Disk{}, nil
+	if len(filename) == 0 {
+		return Disk{}, InvalidFilenameError{filename}
+	}
+	// Open disk file
+	fd, err := os.Open(filename)
+	if err != nil {
+		fd.Close()
+		return Disk{}, err
+	}
+	// Create struct and read data from file
+	d := Disk{fd: fd}
+	err = d.readSuperblock()
+	if err != nil {
+		fd.Close()
+		return Disk{}, err
+	}
+	return d, nil
 }
 
 // Instantiates a new disk and creates the associated file
@@ -90,10 +107,10 @@ func createDisk(filename string, dataBlocks int) (Disk, error) {
 
 // Initializes the filesystem
 // Scope: internal
-func (d Disk) initFS() error {
+func (d *Disk) initFS() error {
 	numFATBlks := int(math.Ceil((2 * float64(d.dataBlockCt)) / BlockSize))
 	numTotalBlks := 2 + numFATBlks + d.dataBlockCt
-	// initalize full disk
+	// initialize full disk
 	_, err := d.fd.Write(make([]byte, numTotalBlks*BlockSize))
 	if err != nil {
 		return err
@@ -107,7 +124,7 @@ func (d Disk) initFS() error {
 
 // Initializes the superblock, called by initFS()
 // Scope: internal
-func (d Disk) initSuperblock() error {
+func (d *Disk) initSuperblock() error {
 	// (2 bytes per FAT Entry) * (Num FAT Entries) / (Num bytes per block)
 	numFatBlks := int(math.Ceil((2 * float64(d.dataBlockCt)) / BlockSize))
 	// 1 block for superblock + 1 block for root directory + FAT + data
@@ -139,5 +156,32 @@ func (d Disk) initSuperblock() error {
 	if err != nil {
 		return err
 	}
+	return nil
+}
+
+func (d *Disk) readSuperblock() error {
+	var offset int64 = 0
+	superblock := make([]byte, BlockSize)
+	_, err := d.fd.ReadAt(superblock, offset)
+	if err != nil {
+		return err
+	}
+	// load fields as subslices
+	sig := superblock[:SbSigSize]
+	blockCt := superblock[SbBlockCtOffset:(SbBlockCtOffset + SbBlockCtSize)]
+	rootDirInd := superblock[SbRootDirIndOffset:(SbRootDirIndOffset + SbRootDirIndSize)]
+	dataStartInd := superblock[SbDataStartIndOffset:(SbDataStartIndOffset + SbDataStartIndSize)]
+	dataBlockCt := superblock[SbDataBlockCtOffset:(SbDataBlockCtOffset + SbDataBlockCtSize)]
+	fatBlockCt := superblock[SbFatBlockCtOffset:(SbFatBlockCtOffset + SbFatBlockCtSize)]
+	// read data from each subslice into correspond struct member
+	builder := strings.Builder{}
+	builder.Write(sig)
+	d.sig = builder.String()
+	d.blockCt = int(binary.LittleEndian.Uint16(blockCt))
+	d.rootDirInd = int(binary.LittleEndian.Uint16(rootDirInd))
+	d.dataStartInd = int(binary.LittleEndian.Uint16(dataStartInd))
+	d.dataBlockCt = int(binary.LittleEndian.Uint16(dataBlockCt))
+	d.fatBlockCt = int(fatBlockCt[0])
+
 	return nil
 }
