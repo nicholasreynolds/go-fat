@@ -26,7 +26,7 @@ func (f *File) ReadAt(buff []byte, offset int) (int, error) {
 
 func (f *File) Close() error {
 	if f == nil {
-		return CustomError{"Nil Structure"}
+		return CustomError{"Nil structure"}
 	}
 	if len(f.name) == 0 {
 		return MemberUndefinedError{"name"}
