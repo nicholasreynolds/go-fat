@@ -2,9 +2,9 @@ package disk
 
 type File struct {
 	name   string // filename
-	disk   *Disk  // disk reference. Necessary for read/write ops
+	disk   *Disk  // disk reference
 	desc   int    // file descriptor i.e. the block index on disk
-	offset int    // byte offset from
+	offset int    // byte offset from beginning of start block
 	size   int    // size in bytes
 }
 
