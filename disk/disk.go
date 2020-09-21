@@ -2,45 +2,35 @@ package disk
 
 import (
 	"encoding/binary"
-	"fmt"
 	"math"
 	"os"
 	"strings"
 )
 
 const (
-	SbSig                = "NEWFATFS"
-	BlockSize            = 4096
-	SbSigSize            = 8
-	SbBlockCtOffset      = 0x08
-	SbBlockCtSize        = 2
-	SbRootDirIndOffset   = 0x0A
-	SbRootDirIndSize     = 2
-	SbDataStartIndOffset = 0x0C
-	SbDataStartIndSize   = 2
-	SbDataBlockCtOffset  = 0x0E
-	SbDataBlockCtSize    = 2
-	SbFatBlockCtOffset   = 0x10
-	SbFatBlockCtSize     = 1
-	SbPaddSize           = 4079
-	SbPaddOffset         = 0x11
+	SbSig                   = "NEWFATFS"
+	BlockSize               = 4096
+	SbSigSize               = 8
+	SbBlockCtOffset         = 0x08
+	SbBlockCtSize           = 2
+	SbRootDirIndOffset      = 0x0A
+	SbRootDirIndSize        = 2
+	SbDataStartIndOffset    = 0x0C
+	SbDataStartIndSize      = 2
+	SbDataBlockCtOffset     = 0x0E
+	SbDataBlockCtSize       = 2
+	SbFatBlockCtOffset      = 0x10
+	SbFatBlockCtSize        = 1
+	SbPaddSize              = 4079
+	SbPaddOffset            = 0x11
+	FatEoc                  = 0xFFFF
+	FatEntrySize            = 2
+	FatEntryUnused          = 0
+	RootEntrySize           = 32
+	RootEntryFilenameSize   = 16
+	RootEntrySizeFieldSize  = 4
+	RootEntryStartBlockSize = 2
 )
-
-type CustomError struct {
-	message string
-}
-
-func (e CustomError) Error() string {
-	return e.message
-}
-
-type InvalidFilenameError struct {
-	filename string
-}
-
-func (e InvalidFilenameError) Error() string {
-	return fmt.Sprintf("File Not Found: %s", e.filename)
-}
 
 type Disk struct {
 	fd           *os.File // file descriptor for disk file
@@ -50,6 +40,7 @@ type Disk struct {
 	dataStartInd int      // disk block index of first data block
 	dataBlockCt  int      // number of data blocks on disk
 	fatBlockCt   int      // number of blocks used to store FAT
+	open		 map[string]bool // map of all open files
 }
 
 // Makes a new disk and initializes its filesystem
@@ -89,6 +80,51 @@ func Mount(filename string) (Disk, error) {
 	return d, nil
 }
 
+func (d *Disk) Create(filename string) (File, error) {
+	// find free data block entry in fat
+	blockInd, err := d.initFatChain()
+	if err != nil {
+		return File{}, err
+	}
+	// add root directory entry for file
+	rootInd, err := d.initRootEntry(filename, blockInd)
+	if err != nil {
+		return File{}, err
+	}
+	// set file open flag true
+	d.open[filename] = true
+	return File{
+		name:   filename,
+		disk:   d,
+		desc:   rootInd,
+		offset: 0,
+		size:   0,
+	}, nil
+}
+
+// Opens the file with given filename, if not already open.
+// Returns: (File structure reference, any error that occurred)
+func (d *Disk) Open(filename string) (File, error) {
+	if d.checkIsOpen(filename) {
+		return File{}, FileAlreadyInUseError{filename}
+	}
+	file := File{
+		name:   filename,
+		disk:   d,
+		desc:   0,
+		offset: 0,
+		size:   0,
+	}
+	// load root entry values into file struct
+	err := d.loadRootEntry(&file)
+	if err != nil {
+		return File{}, err
+	}
+	// if no errors encountered, set open flag true
+	d.open[filename] = true
+	return file, nil
+}
+
 // Instantiates a new disk and creates the associated file
 // Scope: internal
 func createDisk(filename string, dataBlocks int) (Disk, error) {
@@ -102,13 +138,17 @@ func createDisk(filename string, dataBlocks int) (Disk, error) {
 		return Disk{}, err
 	}
 
-	return Disk{fd: file, dataBlockCt: dataBlocks}, nil
+	return Disk{
+		fd: file,
+		dataBlockCt: dataBlocks,
+		open: make(map[string]bool),
+	}, nil
 }
 
 // Initializes the filesystem
 // Scope: internal
 func (d *Disk) initFS() error {
-	numFATBlks := int(math.Ceil((2 * float64(d.dataBlockCt)) / BlockSize))
+	numFATBlks := int(math.Ceil((FatEntrySize * float64(d.dataBlockCt)) / BlockSize))
 	numTotalBlks := 2 + numFATBlks + d.dataBlockCt
 	// initialize full disk
 	_, err := d.fd.Write(make([]byte, numTotalBlks*BlockSize))
@@ -126,7 +166,7 @@ func (d *Disk) initFS() error {
 // Scope: internal
 func (d *Disk) initSuperblock() error {
 	// (2 bytes per FAT Entry) * (Num FAT Entries) / (Num bytes per block)
-	numFatBlks := int(math.Ceil((2 * float64(d.dataBlockCt)) / BlockSize))
+	numFatBlks := int(math.Ceil((FatEntrySize * float64(d.dataBlockCt)) / BlockSize))
 	// 1 block for superblock + 1 block for root directory + FAT + data
 	numBlks := 2 + numFatBlks + d.dataBlockCt
 	// initialize superblock byte slice and extract subslices for each section
@@ -184,4 +224,92 @@ func (d *Disk) readSuperblock() error {
 	d.fatBlockCt = int(fatBlockCt[0])
 
 	return nil
+}
+
+// Locates a free fat entry and writes End-Of-Chain value to it.
+// Otherwise returns a Full Disk Error
+func (d *Disk) initFatChain() (int, error) {
+	fatBuff := make([]byte, d.fatBlockCt*BlockSize)
+	offset := int64(BlockSize)
+	d.fd.ReadAt(fatBuff, offset)
+	for i := 0; i < len(fatBuff); i += FatEntrySize {
+		fatEntry := fatBuff[i : i+FatEntrySize]
+		fatVal := binary.LittleEndian.Uint16(fatEntry)
+		// find unused fat entry (i.e. has value 0)
+		if fatVal == FatEntryUnused {
+			binary.LittleEndian.PutUint16(fatEntry, FatEoc)
+			d.fd.WriteAt(fatBuff, offset)
+			return i, nil
+		}
+	}
+	return 0, FullDiskError{}
+}
+
+// Writes a new root directory entry for the specified file, if space is available
+// Returns: (index of entry in directory, any error encountered)
+// Scope: Internal
+func (d *Disk) initRootEntry(filename string, startBlock int) (int, error) {
+	rootBuff := make([]byte, BlockSize)
+	offset := int64(d.rootDirInd * BlockSize)
+	d.fd.ReadAt(rootBuff, offset)
+	for i := 0; i < len(rootBuff); i += RootEntrySize {
+		rootEntry := rootBuff[i : i+RootEntrySize]
+		name := rootEntry[:RootEntryFilenameSize]
+		// check if entry is empty (i.e. name is null)
+		if name[0] == 0 {
+			// set filename
+			copy(name, filename)
+			// set first data block
+			dtBlkOffset := RootEntryFilenameSize + RootEntrySizeFieldSize
+			first := rootEntry[dtBlkOffset : dtBlkOffset+RootEntryStartBlockSize]
+			binary.LittleEndian.PutUint16(first, uint16(startBlock))
+			// write back to disk
+			d.fd.WriteAt(rootBuff, offset)
+			return i, nil
+		}
+		// check if filename already exists
+		builder := strings.Builder{}
+		builder.Write(name)
+		if strings.Compare(builder.String(), filename) == 0 {
+			return 0, FileAlreadyExistsError{filename}
+		}
+	}
+	return 0, RootDirFullError{}
+}
+
+func (d *Disk) checkIsOpen(filename string) bool {
+	// check filename is in map and open flag is set to true
+	v, ok := d.open[filename]
+	return ok && v
+}
+
+func (d *Disk) loadRootEntry(file *File) error {
+	if file == nil {
+		return CustomError{"File structure nil"}
+	}
+	if len(file.name) == 0 {
+		return CustomError{"Filename empty"}
+	}
+	// extract root directory
+	rootBuff := make([]byte, BlockSize)
+	rootOffset := int64(d.rootDirInd*BlockSize)
+	d.fd.ReadAt(rootBuff, rootOffset)
+	// find root entry for filename and load values into struct
+	for i := 0; i < len(rootBuff); i += RootEntrySize {
+		entry := rootBuff[i : i+RootEntrySize]
+		nameBuilder := strings.Builder{}
+		nameBuilder.Write(entry[:RootEntryFilenameSize])
+		// remove excess null characters
+		name := strings.Trim(nameBuilder.String(), "\x00")
+		// determine if current entry file name matches query
+		if 0 == strings.Compare(name, file.name) {
+			dtBlkOffset := RootEntryFilenameSize+RootEntrySizeFieldSize
+			size := entry[RootEntryFilenameSize : dtBlkOffset]
+			file.size = int(binary.LittleEndian.Uint32(size))
+			dtBlk := entry[dtBlkOffset : dtBlkOffset+RootEntryStartBlockSize]
+			file.desc = int(binary.LittleEndian.Uint16(dtBlk))
+			return nil
+		}
+	}
+	return FileNotFoundError{file.name}
 }
